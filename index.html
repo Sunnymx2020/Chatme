@@ -1,49 +1,104 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="UTF-8">
-  <title>ChatMe Bot</title>
+  <title>ChatMe GPT + Firebase</title>
   <style>
-    body { font-family: sans-serif; background: #f4f4f4; margin: 0; padding: 20px; }
-    #chatbox { max-width: 600px; margin: auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 0 10px #aaa; }
-    #messages { height: 300px; overflow-y: scroll; border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; }
-    .bot, .user { margin: 5px 0; }
-    .bot { color: blue; }
+    body { font-family: Arial; margin: 0; padding: 20px; background: #f9f9f9; }
+    #chat { max-width: 600px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 8px #ccc; }
+    #messages { height: 400px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; margin-bottom: 10px; }
+    .message { margin: 10px 0; }
     .user { color: green; text-align: right; }
-    input { width: 80%; padding: 10px; }
-    button { padding: 10px; }
+    .bot { color: blue; text-align: left; }
+    input, button { padding: 10px; font-size: 16px; }
+    input { width: 80%; }
   </style>
 </head>
 <body>
-  <div id="chatbox">
-    <h2>ChatMe Bot</h2>
-    <div id="messages"></div>
-    <input id="msgInput" placeholder="Type your message..." onkeypress="if(event.key==='Enter'){sendMessage();}">
-    <button onclick="sendMessage()">Send</button>
-  </div>
 
-  <script>
-    const messages = document.getElementById('messages');
-    const input = document.getElementById('msgInput');
+<div id="chat">
+  <h2>ChatMe GPT + Firebase</h2>
+  <div id="messages"></div>
+  <input type="text" id="inputMsg" placeholder="Type message..." />
+  <button onclick="sendMessage()">Send</button>
+</div>
 
-    function sendMessage() {
-      const msg = input.value.trim();
-      if (!msg) return;
-      messages.innerHTML += `<div class="user">${msg}</div>`;
-      input.value = '';
-      const reply = getBotReply(msg.toLowerCase());
-      setTimeout(() => {
-        messages.innerHTML += `<div class="bot">${reply}</div>`;
-        messages.scrollTop = messages.scrollHeight;
-      }, 500);
-    }
+<!-- Firebase SDKs -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
 
-    function getBotReply(msg) {
-      if (msg.includes('hello')) return 'Hi there! 👋';
-      if (msg.includes('how are you')) return 'I am just code, but doing well!';
-      if (msg.includes('bye')) return 'Goodbye! See you later!';
-      return "I don't understand that yet. 😅";
-    }
-  </script>
+<script>
+  // Your Firebase config here
+  const firebaseConfig = {
+    apiKey: "AIzaSyBPF1VE82Y3VkZe6IibjqKxBC-XHjM_Wco",
+    authDomain: "https://chat-2024-ff149-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "chat-2024-ff14",
+    storageBucket: "chat-2024-ff149.appspot.com",
+    messagingSenderId: "SENDER_ID",
+    appId: "APP_ID"
+  };
+
+  // Initialize Firebase
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.firestore();
+  const auth = firebase.auth();
+
+  // Sign in anonymously
+  auth.signInAnonymously().catch(console.error);
+
+  const messagesDiv = document.getElementById('messages');
+  const inputMsg = document.getElementById('inputMsg');
+
+  // Load chat messages in realtime
+  db.collection('chatmessages').orderBy('timestamp')
+    .onSnapshot(snapshot => {
+      messagesDiv.innerHTML = '';
+      snapshot.forEach(doc => {
+        const msg = doc.data();
+        const div = document.createElement('div');
+        div.className = 'message ' + (msg.from === 'user' ? 'user' : 'bot');
+        div.textContent = msg.text;
+        messagesDiv.appendChild(div);
+      });
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    });
+
+  async function sendMessage() {
+    const text = inputMsg.value.trim();
+    if (!text) return;
+    inputMsg.value = '';
+
+    // Save user message to Firebase
+    await db.collection('chatmessages').add({
+      text: text,
+      from: 'user',
+      timestamp: firebase.firestore.FieldValue.serverTimestamp()
+    });
+
+    // Send message to your backend GPT server and save bot reply
+    fetch('https://your-backend.example.com/api/gpt', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({message: text})
+    })
+    .then(response => response.json())
+    .then(async data => {
+      await db.collection('chatmessages').add({
+        text: data.reply,
+        from: 'bot',
+        timestamp: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    })
+    .catch(err => {
+      console.error('GPT API error:', err);
+      await db.collection('chatmessages').add({
+        text: "Sorry, I can't reply right now.",
+        from: 'bot',
+        timestamp: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    });
+  }
+</script>
+
 </body>
 </html>
