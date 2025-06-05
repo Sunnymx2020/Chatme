@@ -1,9 +1,9 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
   <title>ChatMe - Smart Bot</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     body {
       font-family: Arial, sans-serif;
@@ -19,6 +19,8 @@
       flex: 1;
       overflow-y: auto;
       padding: 10px;
+      display: flex;
+      flex-direction: column;
     }
     .msg {
       padding: 8px;
@@ -26,9 +28,18 @@
       border-radius: 6px;
       max-width: 80%;
       word-wrap: break-word;
+      cursor: pointer;
+      user-select: none;
+      position: relative;
     }
-    .user { background: #1e88e5; align-self: flex-end; }
-    .bot { background: #43a047; align-self: flex-start; }
+    .user {
+      background: #1e88e5;
+      align-self: flex-end;
+    }
+    .bot {
+      background: #43a047;
+      align-self: flex-start;
+    }
     #inputArea {
       display: flex;
       padding: 10px;
@@ -46,6 +57,17 @@
       color: white;
       border: none;
     }
+    #exportBtn {
+      background: #ff5722;
+      margin: 10px;
+      border-radius: 5px;
+      cursor: pointer;
+      padding: 8px 16px;
+      border: none;
+      color: white;
+      font-weight: bold;
+      align-self: center;
+    }
   </style>
 </head>
 <body>
@@ -55,13 +77,14 @@
     <input type="text" id="inputMsg" placeholder="Type a message..." />
     <button onclick="send()">Send</button>
   </div>
+  <button id="exportBtn">Export Knowledge</button>
 
   <!-- Firebase -->
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
 
   <script>
-    // ✅ Your Firebase Config
+    // Firebase Config
     const firebaseConfig = {
       apiKey: "AIzaSyBPF1VE82Y3VkZe6IibjqKxBC-XHjM_Wco",
       authDomain: "chat-2024-ff149.firebaseapp.com",
@@ -76,6 +99,64 @@
 
     const messages = document.getElementById("messages");
     const input = document.getElementById("inputMsg");
+    const exportBtn = document.getElementById("exportBtn");
+
+    // For demo, simple userId (replace with real auth if you want)
+    const userId = localStorage.getItem('userId') || 'guest_' + Math.floor(Math.random() * 10000);
+    localStorage.setItem('userId', userId);
+
+    // Synonyms dictionary (expand as needed)
+    const synonyms = {
+      hi: ['hello', 'hey', 'howdy', 'hola'],
+      bye: ['goodbye', 'see ya', 'farewell'],
+      thanks: ['thank you', 'thx', 'ty'],
+      // add more synonym groups here
+    };
+
+    // Normalize and map synonym words
+    function normalize(text) {
+      return text.toLowerCase().trim();
+    }
+
+    // Try to find synonym key for a word
+    function findSynonymKey(word) {
+      word = normalize(word);
+      for (const key in synonyms) {
+        if (key === word || synonyms[key].includes(word)) return key;
+      }
+      return word;
+    }
+
+    // Simple fuzzy match: check if normalized user question or synonyms match keys
+    async function findBestMatch(question) {
+      const normQ = normalize(question);
+      const parts = normQ.split(/\s+/).map(findSynonymKey);
+
+      // We'll check all known keys and find one with max overlap
+      const knowledgeRef = db.ref('chatbot/knowledge/' + userId);
+      const snapshot = await knowledgeRef.get();
+      if (!snapshot.exists()) return null;
+      const data = snapshot.val();
+
+      let bestMatchKey = null;
+      let bestScore = 0;
+
+      for (const key in data) {
+        const keyParts = key.split(/\s+/).map(findSynonymKey);
+        // Count common words
+        let common = 0;
+        parts.forEach(p => {
+          if (keyParts.includes(p)) common++;
+        });
+        if (common > bestScore) {
+          bestScore = common;
+          bestMatchKey = key;
+        }
+      }
+      // Only accept match if some common words found
+      if (bestScore > 0) return bestMatchKey;
+      return null;
+    }
 
     function addMessage(text, sender) {
       const div = document.createElement("div");
@@ -83,10 +164,34 @@
       div.textContent = text;
       messages.appendChild(div);
       messages.scrollTop = messages.scrollHeight;
-    }
 
-    function normalize(text) {
-      return text.toLowerCase().trim();
+      // Add long press for bot messages to delete learned replies
+      if (sender === 'bot') {
+        let pressTimer;
+        div.addEventListener('mousedown', () => {
+          pressTimer = setTimeout(async () => {
+            if (confirm('Delete this learned reply?')) {
+              // Delete from Firebase by key
+              // We need to find the key for this answer
+              const knowledgeRef = db.ref('chatbot/knowledge/' + userId);
+              const snapshot = await knowledgeRef.get();
+              if (snapshot.exists()) {
+                const data = snapshot.val();
+                for (const key in data) {
+                  if (data[key] === text) {
+                    await knowledgeRef.child(key).remove();
+                    alert('Reply deleted.');
+                    location.reload(); // Reload page to refresh messages
+                    return;
+                  }
+                }
+              }
+            }
+          }, 1000);
+        });
+        div.addEventListener('mouseup', () => clearTimeout(pressTimer));
+        div.addEventListener('mouseleave', () => clearTimeout(pressTimer));
+      }
     }
 
     async function send() {
@@ -95,23 +200,52 @@
       input.value = '';
       addMessage(userText, 'user');
 
-      const questionKey = normalize(userText);
-      const answerRef = db.ref('chatbot/knowledge/' + questionKey);
-      const snapshot = await answerRef.get();
+      const knowledgeRef = db.ref('chatbot/knowledge/' + userId);
+      // First try exact match
+      const exactSnap = await knowledgeRef.child(normalize(userText)).get();
 
-      if (snapshot.exists()) {
-        const answer = snapshot.val();
-        addMessage(answer, 'bot');
+      if (exactSnap.exists()) {
+        addMessage(exactSnap.val(), 'bot');
+        return;
+      }
+
+      // Else try fuzzy/synonym match
+      const bestKey = await findBestMatch(userText);
+      if (bestKey) {
+        const answerSnap = await knowledgeRef.child(bestKey).get();
+        addMessage(answerSnap.val(), 'bot');
+        return;
+      }
+
+      // Else teach mode
+      const teach = prompt(`I don't know how to answer:\n"${userText}"\nPlease teach me:`);
+      if (teach) {
+        await knowledgeRef.child(normalize(userText)).set(teach);
+        addMessage("Thanks! I learned something new.", 'bot');
       } else {
-        const teach = prompt(`I don't know how to answer:\n"${userText}"\nPlease teach me:`);
-        if (teach) {
-          await answerRef.set(teach);
-          addMessage("Thanks! I learned something new.", 'bot');
-        } else {
-          addMessage("Okay, maybe next time.", 'bot');
-        }
+        addMessage("Okay, maybe next time.", 'bot');
       }
     }
+
+    // Export knowledge as JSON and download
+    exportBtn.addEventListener('click', async () => {
+      const knowledgeRef = db.ref('chatbot/knowledge/' + userId);
+      const snapshot = await knowledgeRef.get();
+      if (!snapshot.exists()) {
+        alert("No knowledge to export.");
+        return;
+      }
+      const data = snapshot.val();
+      const jsonStr = JSON.stringify(data, null, 2);
+      const blob = new Blob([jsonStr], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `chatbot_knowledge_${userId}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+
   </script>
 </body>
 </html>
